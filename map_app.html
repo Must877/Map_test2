@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>プライベート地図記録アプリ</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            overflow: hidden; /* Prevent body scroll */
+        }
+        #map {
+            height: 100%;
+            width: 100%;
+            border-radius: 0.5rem; /* rounded-lg equivalent */
+            box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.06); /* shadow-inner equivalent */
+        }
+        .leaflet-container {
+            height: 100%;
+            width: 100%;
+        }
+        /* カスタムマーカーアイコンのスタイル */
+        .custom-div-icon {
+            background-color: transparent;
+            border: none;
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen bg-gray-100">
+    <div id="root" class="flex flex-col flex-grow"></div>
+
+    <!-- React CDN -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel Standalone CDN for JSX transpilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <script type="text/babel"> {/* type="module" から type="text/babel" に変更 */}
+        const { useState, useEffect, useRef } = React;
+        const { createRoot } = ReactDOM; // createRootを使用
+
+        // ローカルストレージのキー
+        const LOCAL_STORAGE_KEY = 'privateMapRecords';
+        const LOCAL_STORAGE_VISITED_POINTS_KEY = 'privateMapVisitedPoints';
+
+        // 2点間の距離を計算するヘルパー関数 (Haversine formula)
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+          const R = 6371e3; // metres
+          const φ1 = lat1 * Math.PI / 180; // φ, λ in radians
+          const φ2 = lat2 * Math.PI / 180;
+          const Δφ = (lat2 - lat1) * Math.PI / 180;
+          const Δλ = (lon2 - lon1) * Math.PI / 180;
+
+          const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+                    Math.cos(φ1) * Math.cos(φ2) *
+                    Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+          const d = R * c; // in metres
+          return d;
+        }
+
+        function App() {
+          const [userId, setUserId] = useState('local_user'); // ローカルストレージなので固定のユーザーID
+          const [records, setRecords] = useState([]);
+          const [visitedPoints, setVisitedPoints] = useState([]); // 訪れた場所の履歴
+          const [showForm, setShowForm] = useState(false);
+          const [editingRecord, setEditingRecord] = useState(null);
+          const [currentLocation, setCurrentLocation] = useState(null);
+          const [mapInitialized, setMapInitialized] = useState(false);
+          const [geolocationError, setGeolocationError] = useState(false);
+          const mapRef = useRef(null);
+          const markersRef = useRef({}); // マーカーインスタンスを保持するための参照
+          const visitedCirclesRef = useRef([]); // 訪れた場所の円を保持するための参照
+
+          // アプリ起動時にローカルストレージからデータを読み込む
+          useEffect(() => {
+            try {
+              const storedRecords = localStorage.getItem(LOCAL_STORAGE_KEY);
+              if (storedRecords) {
+                setRecords(JSON.parse(storedRecords));
+              }
+              const storedVisitedPoints = localStorage.getItem(LOCAL_STORAGE_VISITED_POINTS_KEY);
+              if (storedVisitedPoints) {
+                setVisitedPoints(JSON.parse(storedVisitedPoints));
+              }
+            } catch (e) {
+              console.error("ローカルストレージからの読み込みエラー:", e);
+            }
+          }, []);
+
+          // ユーザーの現在地を取得し、訪れた場所を記録
+          useEffect(() => {
+            if ("geolocation" in navigator) {
+              const watchId = navigator.geolocation.watchPosition(
+                (position) => {
+                  const { latitude, longitude } = position.coords;
+                  const newLocation = [latitude, longitude];
+                  setCurrentLocation(newLocation);
+                  setGeolocationError(false);
+
+                  // 50m以上移動したら訪れた場所として記録
+                  if (visitedPoints.length === 0 || calculateDistance(visitedPoints[visitedPoints.length - 1][0], visitedPoints[visitedPoints.length - 1][1], newLocation[0], newLocation[1]) >= 50) {
+                    setVisitedPoints(prevPoints => {
+                      const updatedPoints = [...prevPoints, newLocation];
+                      localStorage.setItem(LOCAL_STORAGE_VISITED_VISITED_POINTS_KEY, JSON.stringify(updatedPoints));
+                      return updatedPoints;
+                    });
+                  }
+                },
+                (error) => {
+                  console.error("現在地取得エラー:", {
+                    code: error.code,
+                    message: error.message
+                  });
+                  setCurrentLocation([35.6895, 139.6917]); // 東京駅をデフォルト
+                  setGeolocationError(true);
+                },
+                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+              );
+              return () => navigator.geolocation.clearWatch(watchId);
+            } else {
+              console.log("Geolocationはブラウザでサポートされていません。");
+              setCurrentLocation([35.6895, 139.6917]); // 東京駅をデフォルト
+              setGeolocationError(true);
+            }
+          }, [visitedPoints]); // visitedPointsが更新されたら再評価
+
+          // マップの初期化とLeafletの動的ロード
+          useEffect(() => {
+            const loadLeafletCss = () => {
+              if (!document.querySelector('link[href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css"]')) {
+                const link = document.createElement('link');
+                link.rel = 'stylesheet';
+                link.href = 'https://unpkg.com/leaflet@1.7.1/dist/leaflet.css';
+                document.head.appendChild(link);
+              }
+            };
+
+            const loadLeafletJs = () => {
+              return new Promise((resolve) => {
+                if (window.L) {
+                  resolve();
+                  return;
+                }
+                if (!document.querySelector('script[src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"]')) {
+                  const script = document.createElement('script');
+                  script.src = 'https://unpkg.com/leaflet@1.7.1/dist/leaflet.js';
+                  script.onload = resolve;
+                  script.onerror = () => console.error("Leaflet JSのロードに失敗しました。");
+                  document.head.appendChild(script);
+                } else {
+                    const existingScript = document.querySelector('script[src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"]');
+                    if (existingScript) {
+                        existingScript.onload = resolve;
+                    }
+                }
+              });
+            };
+
+            const initializeMap = async () => {
+              if (currentLocation && !mapInitialized) {
+                await loadLeafletJs();
+                if (window.L) {
+                  // Leafletのデフォルトアイコンが壊れる問題を修正
+                  delete window.L.Icon.Default.prototype._getIconUrl;
+                  window.L.Icon.Default.mergeOptions({
+                    iconRetinaUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon-2x.png',
+                    iconUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon.png',
+                    shadowUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png',
+                  });
+
+                  mapRef.current = window.L.map('map').setView(currentLocation, 15);
+                  window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                    maxZoom: 19,
+                    minZoom: 5,
+                  }).addTo(mapRef.current);
+
+                  mapRef.current.on('click', (e) => {
+                    setEditingRecord({
+                      latitude: e.latlng.lat,
+                      longitude: e.latlng.lng,
+                      text: '',
+                      imageUrl: '',
+                      videoUrl: '',
+                      emotion: '普通',
+                    });
+                    setShowForm(true);
+                  });
+                  setMapInitialized(true);
+                }
+              }
+            };
+
+            loadLeafletCss();
+            initializeMap();
+
+            return () => {
+              if (mapRef.current) {
+                mapRef.current.remove();
+                mapRef.current = null;
+              }
+            };
+          }, [currentLocation, mapInitialized]);
+
+          // 記録と現在地、訪れた場所が更新されたときにマップ上の要素を更新
+          useEffect(() => {
+            if (mapInitialized && mapRef.current && window.L) {
+              // 既存のマーカーと円をクリア
+              Object.values(markersRef.current).forEach(marker => {
+                mapRef.current.removeLayer(marker);
+              });
+              markersRef.current = {};
+
+              visitedCirclesRef.current.forEach(circle => {
+                mapRef.current.removeLayer(circle);
+              });
+              visitedCirclesRef.current = [];
+
+              const allPointsForBounds = [];
+
+              // 訪れた場所の円を追加
+              visitedPoints.forEach(point => {
+                const circle = window.L.circle(point, {
+                  color: 'blue',
+                  fillColor: '#3080f0',
+                  fillOpacity: 0.2,
+                  radius: 50 // 半径50m
+                }).addTo(mapRef.current);
+                visitedCirclesRef.current.push(circle);
+                allPointsForBounds.push(point); // 表示範囲計算に含める
+              });
+
+              // 記録マーカーを追加
+              records.forEach(record => {
+                const marker = window.L.marker([record.latitude, record.longitude]).addTo(mapRef.current);
+                let popupContent = `
+                  <div class="p-2">
+                    <h3 class="font-bold text-lg mb-1">${record.text.substring(0, 30)}${record.text.length > 30 ? '...' : ''}</h3>
+                    <p class="text-sm text-gray-700 mb-1">感情: ${record.emotion || '未設定'}</p>
+                    ${record.imageUrl ? `<img src="${record.imageUrl}" alt="記録画像" class="w-full h-32 object-cover rounded mb-2" onerror="this.onerror=null;this.src='https://placehold.co/200x100/A0AEC0/FFFFFF?text=画像なし';">` : ''}
+                    ${record.videoUrl ? `<p class="text-sm text-gray-600">動画: <a href="${record.videoUrl}" target="_blank" class="text-blue-500 hover:underline">再生</a></p>` : ''}
+                    <button id="view-record-${record.id}" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-1 px-2 rounded text-xs mt-2">詳細を見る</button>
+                  </div>
+                `;
+                marker.bindPopup(popupContent);
+
+                marker.on('popupopen', () => {
+                  document.getElementById(`view-record-${record.id}`).addEventListener('click', () => {
+                    setEditingRecord(record);
+                    setShowForm(true);
+                  });
+                });
+                markersRef.current[record.id] = marker;
+                allPointsForBounds.push([record.latitude, record.longitude]); // 表示範囲計算に含める
+              });
+
+              // 現在地マーカーを更新
+              if (currentLocation) {
+                if (markersRef.current['currentLocation']) {
+                  mapRef.current.removeLayer(markersRef.current['currentLocation']);
+                }
+                const userIcon = window.L.divIcon({
+                  className: 'custom-div-icon',
+                  html: '<div class="bg-blue-600 w-4 h-4 rounded-full border-2 border-white shadow-lg"></div>',
+                  iconSize: [16, 16],
+                  iconAnchor: [8, 8],
+                });
+                const currentLocationMarker = window.L.marker(currentLocation, { icon: userIcon }).addTo(mapRef.current);
+                currentLocationMarker.bindPopup("あなたの現在地").openPopup();
+                markersRef.current['currentLocation'] = currentLocationMarker;
+                allPointsForBounds.push(currentLocation); // 表示範囲計算に含める
+              }
+
+              // すべての記録、訪れた場所、現在地を含むように地図の表示範囲を調整
+              if (allPointsForBounds.length > 0) {
+                const bounds = window.L.latLngBounds(allPointsForBounds);
+                mapRef.current.fitBounds(bounds, { padding: [50, 50], maxZoom: 17 });
+                // maxBoundsは、ユーザーが記録範囲外にパンできないように制限します
+                // 訪れた場所の円の半径を考慮して、bounds.pad(0.5)でパディングを増やします
+                mapRef.current.setMaxBounds(bounds.pad(0.5));
+              } else if (currentLocation) {
+                // 記録がない場合は現在地を中心に表示
+                mapRef.current.setView(currentLocation, 15);
+              }
+            }
+          }, [records, mapInitialized, currentLocation, visitedPoints]); // visitedPointsを依存配列に追加
+
+          // フォームの送信ハンドラー
+          const handleSubmitRecord = async (recordData) => {
+            // ローカルストレージに保存
+            let updatedRecords;
+            if (recordData.id) {
+              updatedRecords = records.map(rec => rec.id === recordData.id ? recordData : rec);
+            } else {
+              updatedRecords = [...records, { ...recordData, id: Date.now().toString() }]; // ユニークIDを付与
+            }
+            setRecords(updatedRecords);
+            localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updatedRecords));
+            setShowForm(false);
+            setEditingRecord(null);
+          };
+
+          // 記録の削除ハンドラー
+          const handleDeleteRecord = async (recordId) => {
+            if (window.confirm("この記録を本当に削除しますか？")) {
+              const updatedRecords = records.filter(rec => rec.id !== recordId);
+              setRecords(updatedRecords);
+              localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updatedRecords));
+              setShowForm(false);
+              setEditingRecord(null);
+            }
+          };
+
+          // 記録フォームコンポーネント
+          const RecordForm = ({ record, onSubmit, onClose, onDelete }) => {
+            const [text, setText] = useState(record?.text || '');
+            const [imageUrl, setImageUrl] = useState(record?.imageUrl || '');
+            const [videoUrl, setVideoUrl] = useState(record?.videoUrl || '');
+            const [emotion, setEmotion] = useState(record?.emotion || '普通');
+            const [isGeneratingText, setIsGeneratingText] = useState(false);
+
+            const handleSubmit = (e) => {
+              e.preventDefault();
+              onSubmit({
+                id: record?.id,
+                latitude: record.latitude,
+                longitude: record.longitude,
+                text,
+                imageUrl,
+                videoUrl,
+                emotion,
+              });
+            };
+
+            // ✨ Gemini APIを使ったテキスト拡張機能 ✨
+            const handleGenerateText = async () => {
+              if (!text) {
+                alert("テキストが空なので拡張できません。");
+                return;
+              }
+
+              setIsGeneratingText(true);
+              try {
+                const prompt = `以下の場所の記録テキストを、より詳細で感情豊かな日記エントリのように拡張してください。
+                感情は「${emotion}」です。
+                元のテキスト: ${text}`;
+
+                let chatHistory = [];
+                chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+                const payload = { contents: chatHistory };
+                const apiKey = "";
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+                const response = await fetch(apiUrl, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+                if (result.candidates && result.candidates.length > 0 &&
+                    result.candidates[0].content && result.candidates[0].content.parts &&
+                    result.candidates[0].content.parts.length > 0) {
+                  const generatedText = result.candidates[0].content.parts[0].text;
+                  setText(generatedText);
+                } else {
+                  console.error("Gemini APIからの応答が予期しない構造です:", result);
+                  alert("テキストの生成に失敗しました。");
+                }
+              } catch (error) {
+                console.error("Gemini API呼び出しエラー:", error);
+                alert("テキストの生成中にエラーが発生しました。");
+              } finally {
+                setIsGeneratingText(false);
+              }
+            };
+
+            return (
+              <div className="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center p-4 z-50">
+                <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
+                  <h2 className="text-2xl font-bold mb-4 text-gray-800">
+                    {record?.id ? '記録を編集' : '新しい記録を追加'}
+                  </h2>
+                  <form onSubmit={handleSubmit}>
+                    <div className="mb-4">
+                      <label htmlFor="text" className="block text-gray-700 text-sm font-bold mb-2">
+                        テキスト:
+                      </label>
+                      <textarea
+                        id="text"
+                        className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline resize-y min-h-[80px]"
+                        value={text}
+                        onChange={(e) => setText(e.target.value)}
+                        required
+                      ></textarea>
+                      <button
+                        type="button"
+                        onClick={handleGenerateText}
+                        disabled={isGeneratingText}
+                        className="mt-2 bg-purple-500 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline w-full flex items-center justify-center"
+                      >
+                        {isGeneratingText ? (
+                          <>
+                            <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            生成中...
+                          </>
+                        ) : (
+                          '✨ テキストを拡張 ✨'
+                        )}
+                      </button>
+                      <p className="text-xs text-gray-500 mt-1">
+                        (入力されたテキストと感情に基づいて、Geminiがより詳細な日記エントリを生成します。)
+                      </p>
+                    </div>
+                    <div className="mb-4">
+                      <label htmlFor="imageUrl" className="block text-gray-700 text-sm font-bold mb-2">
+                        画像URL:
+                      </label>
+                      <input
+                        type="url"
+                        id="imageUrl"
+                        className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+                        value={imageUrl}
+                        onChange={(e) => setImageUrl(e.target.value)}
+                        placeholder="https://example.com/image.jpg"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        (画像はURLで指定してください。直接アップロードはできません。)
+                      </p>
+                    </div>
+                    <div className="mb-6">
+                      <label htmlFor="videoUrl" className="block text-gray-700 text-sm font-bold mb-2">
+                        動画URL:
+                      </label>
+                      <input
+                        type="url"
+                        id="videoUrl"
+                        className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+                        value={videoUrl}
+                        onChange={(e) => setVideoUrl(e.target.value)}
+                        placeholder="https://example.com/video.mp4"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        (動画はURLで指定してください。直接アップロードはできません。)
+                      </p>
+                    </div>
+                    <div className="mb-6">
+                      <label htmlFor="emotion" className="block text-gray-700 text-sm font-bold mb-2">
+                        感情:
+                      </label>
+                      <select
+                        id="emotion"
+                        className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+                        value={emotion}
+                        onChange={(e) => setEmotion(e.target.value)}
+                      >
+                        <option value="気持ちが良い">気持ちが良い</option>
+                        <option value="普通">普通</option>
+                        <option value="気持ち良くない">気持ち良くない</option>
+                      </select>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <button
+                        type="submit"
+                        className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"
+                      >
+                        {record?.id ? '更新' : '保存'}
+                      </button>
+                      {record?.id && (
+                        <button
+                          type="button"
+                          onClick={() => onDelete(record.id)}
+                          className="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"
+                        >
+                          削除
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={onClose}
+                        className="bg-gray-500 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"
+                      >
+                        キャンセル
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            );
+          };
+
+          return (
+            <div className="flex flex-col h-screen font-inter bg-gray-100">
+              <header className="bg-gradient-to-r from-blue-600 to-purple-700 text-white p-4 shadow-md rounded-b-lg">
+                <h1 className="text-3xl font-extrabold text-center">プライベート地図記録</h1>
+                {/* ローカルストレージ管理のため、ユーザーIDの表示は固定 */}
+                <p className="text-sm text-center mt-1 opacity-80">ユーザーID: {userId}</p>
+              </header>
+
+              <main className="flex-grow relative">
+                <div id="map" className="w-full h-full rounded-lg shadow-inner"></div>
+                {geolocationError && (
+                  <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-red-500 text-white p-2 rounded-md shadow-lg z-50">
+                    位置情報の取得に失敗しました。デフォルトの場所を表示しています。
+                    (この環境のセキュリティポリシーによりGeolocationが無効化されている可能性があります。)
+                  </div>
+                )}
+                {showForm && (
+                  <RecordForm
+                    record={editingRecord}
+                    onSubmit={handleSubmitRecord}
+                    onClose={() => {
+                      setShowForm(false);
+                      setEditingRecord(null);
+                    }}
+                    onDelete={handleDeleteRecord}
+                  />
+                )}
+              </main>
+
+              <footer className="bg-gray-800 text-white p-3 text-center text-sm rounded-t-lg shadow-inner mt-2">
+                © 2023 プライベート地図記録アプリ. すべての権利を保有.
+              </footer>
+            </div>
+          );
+        }
+
+        // ReactアプリケーションをDOMにレンダリング
+        const container = document.getElementById('root');
+        const root = createRoot(container);
+        root.render(<App />);
+    </script>
+</body>
+</html>
