@@ -4,9 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>プライベート地図記録アプリ</title>
-    <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Inter Font -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
     <style>
         body {
@@ -34,10 +32,8 @@
 <body class="flex flex-col h-screen bg-gray-100">
     <div id="root" class="flex flex-col flex-grow"></div>
 
-    <!-- React CDN -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <!-- Babel Standalone CDN for JSX transpilation -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
     <script type="text/babel"> {/* type="module" から type="text/babel" に変更 */}
@@ -46,7 +42,7 @@
 
         // ローカルストレージのキー
         const LOCAL_STORAGE_KEY = 'privateMapRecords';
-        const LOCAL_STORAGE_VISITED_POINTS_KEY = 'privateMapVisitedPoints';
+        const LOCAL_STORAGE_VISITED_POINTS_KEY = 'privateMapVisitedPoints'; // 正しい定義
 
         // 2点間の距離を計算するヘルパー関数 (Haversine formula)
         function calculateDistance(lat1, lon1, lat2, lon2) {
@@ -108,7 +104,8 @@
                   if (visitedPoints.length === 0 || calculateDistance(visitedPoints[visitedPoints.length - 1][0], visitedPoints[visitedPoints.length - 1][1], newLocation[0], newLocation[1]) >= 50) {
                     setVisitedPoints(prevPoints => {
                       const updatedPoints = [...prevPoints, newLocation];
-                      localStorage.setItem(LOCAL_STORAGE_VISITED_VISITED_POINTS_KEY, JSON.stringify(updatedPoints));
+                      // ここでタイプミスを修正: LOCAL_STORAGE_VISITED_VISITED_POINTS_KEY -> LOCAL_STORAGE_VISITED_POINTS_KEY
+                      localStorage.setItem(LOCAL_STORAGE_VISITED_POINTS_KEY, JSON.stringify(updatedPoints));
                       return updatedPoints;
                     });
                   }
