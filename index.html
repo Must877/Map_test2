@@ -15,7 +15,7 @@
             overflow: hidden; /* Prevent body scroll */
         }
         #map {
-            height: 100%;
+            height: 100%; /* flex-growと併用することで、親の残りの高さを利用 */
             width: 100%;
             border-radius: 0.5rem; /* rounded-lg equivalent */
             box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.06); /* shadow-inner equivalent */
@@ -129,7 +129,7 @@
               setCurrentLocation([35.6895, 139.6917]); // 東京駅をデフォルト
               setGeolocationError(true);
             }
-          }, [visitedPoints]); // visitedPointsが更新されたら再評価
+          }, [visitedPoints]);
 
           // マップの初期化とLeafletの動的ロード
           useEffect(() => {
@@ -139,33 +139,45 @@
                 link.rel = 'stylesheet';
                 link.href = 'https://unpkg.com/leaflet@1.7.1/dist/leaflet.css';
                 document.head.appendChild(link);
+                console.log("Leaflet CSSをロードしました。");
               }
             };
 
             const loadLeafletJs = () => {
               return new Promise((resolve, reject) => {
                 if (window.L) {
+                  console.log("Leaflet JSは既にロードされています。");
                   resolve();
                   return;
                 }
                 const scriptId = 'leaflet-js-cdn';
-                if (document.getElementById(scriptId)) { // 既にスクリプトタグが存在する場合は、ロード完了を待つ
-                    document.getElementById(scriptId).onload = resolve;
-                    document.getElementById(scriptId).onerror = reject;
+                let script = document.getElementById(scriptId);
+                if (script) {
+                    console.log("Leaflet JSスクリプトタグは既に存在します。ロード完了を待機します。");
+                    script.onload = resolve;
+                    script.onerror = reject;
                     return;
                 }
-                const script = document.createElement('script');
+                script = document.createElement('script');
                 script.src = 'https://unpkg.com/leaflet@1.7.1/dist/leaflet.js';
                 script.id = scriptId;
-                script.onload = resolve;
-                script.onerror = reject;
+                script.onload = () => {
+                    console.log("Leaflet JSをロードしました。");
+                    resolve();
+                };
+                script.onerror = (e) => {
+                    console.error("Leaflet JSのロードに失敗しました。", e);
+                    reject(e);
+                };
                 document.head.appendChild(script);
               });
             };
 
             const initializeMap = async () => {
+              console.log("initializeMap開始...");
               if (!currentLocation) {
                 console.log("現在地がまだ取得できていません。マップ初期化をスキップします。");
+                setTimeout(initializeMap, 500); // 現在地が取得できるまで再試行
                 return;
               }
               if (mapInitialized) {
@@ -177,21 +189,23 @@
               const mapDiv = document.getElementById('map');
               if (!mapDiv) {
                 console.error("マップコンテナ #map が見つかりません。");
+                setTimeout(initializeMap, 500); // 少し待って再試行
                 return;
               }
               // マップコンテナの高さが0の場合、表示されないため初期化を遅延
+              // 親要素の高さが確定するまで待つ
               if (mapDiv.offsetHeight === 0 || mapDiv.offsetWidth === 0) {
-                  console.log("マップコンテナのサイズが0です。再試行します。");
-                  setTimeout(initializeMap, 100); // 少し待って再試行
+                  console.log(`マップコンテナのサイズが0です。(高さ: ${mapDiv.offsetHeight}, 幅: ${mapDiv.offsetWidth}) 再試行します。`);
+                  setTimeout(initializeMap, 500); // 少し待って再試行
                   return;
               }
-
 
               try {
                 await loadLeafletJs(); // Leaflet JSがロードされるまで待つ
                 loadLeafletCss(); // CSSはJSロード後に実行しても問題ない
 
                 if (window.L) {
+                  console.log("window.L が利用可能です。マップ初期化を続行します。");
                   // Leafletのデフォルトアイコンが壊れる問題を修正
                   delete window.L.Icon.Default.prototype._getIconUrl;
                   window.L.Icon.Default.mergeOptions({
@@ -200,12 +214,21 @@
                     shadowUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png',
                   });
 
+                  // 既存のマップインスタンスがあれば削除（Hot Reloading対策）
+                  if (mapRef.current) {
+                      mapRef.current.remove();
+                      mapRef.current = null;
+                      console.log("既存のマップインスタンスを削除しました。");
+                  }
+
                   mapRef.current = window.L.map('map').setView(currentLocation, 15);
                   window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
                     maxZoom: 19,
                     minZoom: 5,
                   }).addTo(mapRef.current);
+                  mapRef.current.invalidateSize(); // マップのサイズを再計算させる
+                  console.log("マップサイズを無効化し、再計算をトリガーしました。");
 
                   mapRef.current.on('click', (e) => {
                     setEditingRecord({
@@ -221,7 +244,7 @@
                   setMapInitialized(true);
                   console.log("マップが正常に初期化されました。");
                 } else {
-                  console.error("Leaflet (window.L) がロードされませんでした。");
+                  console.error("Leaflet (window.L) がロードされませんでした。マップ初期化失敗。");
                 }
               } catch (error) {
                 console.error("マップの初期化中にエラーが発生しました:", error);
@@ -242,6 +265,7 @@
           useEffect(() => {
             // mapInitializedがtrueで、かつwindow.Lが存在することを確認
             if (mapInitialized && mapRef.current && window.L) {
+              console.log("マップ要素更新開始...");
               // 既存のマーカーと円をクリア
               Object.values(markersRef.current).forEach(marker => {
                 mapRef.current.removeLayer(marker);
@@ -319,8 +343,9 @@
                 // 記録がない場合は現在地を中心に表示
                 mapRef.current.setView(currentLocation, 15);
               }
+              console.log("マップ要素更新完了。");
             }
-          }, [records, mapInitialized, currentLocation, visitedPoints]); // visitedPointsを依存配列に追加
+          }, [records, mapInitialized, currentLocation, visitedPoints]);
 
           // フォームの送信ハンドラー
           const handleSubmitRecord = async (recordData) => {
@@ -537,8 +562,8 @@
                 <p className="text-sm text-center mt-1 opacity-80">ユーザーID: {userId}</p>
               </header>
 
-              <main className="flex-grow relative">
-                <div id="map" className="w-full h-full rounded-lg shadow-inner"></div>
+              <main class="flex-grow flex flex-col relative"> {/* flex flex-col を追加 */}
+                <div id="map" class="w-full h-full rounded-lg shadow-inner flex-grow"></div> {/* flex-grow を追加 */}
                 {geolocationError && (
                   <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-red-500 text-white p-2 rounded-md shadow-lg z-50">
                     位置情報の取得に失敗しました。デフォルトの場所を表示しています。
