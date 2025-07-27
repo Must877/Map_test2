@@ -4,7 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>プライベート地図記録アプリ</title>
+    <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
     <style>
         body {
@@ -32,17 +34,19 @@
 <body class="flex flex-col h-screen bg-gray-100">
     <div id="root" class="flex flex-col flex-grow"></div>
 
+    <!-- React CDN -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel Standalone CDN for JSX transpilation -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-    <script type="text/babel"> {/* type="module" から type="text/babel" に変更 */}
+    <script type="text/babel">
         const { useState, useEffect, useRef } = React;
-        const { createRoot } = ReactDOM; // createRootを使用
+        const { createRoot } = ReactDOM;
 
         // ローカルストレージのキー
         const LOCAL_STORAGE_KEY = 'privateMapRecords';
-        const LOCAL_STORAGE_VISITED_POINTS_KEY = 'privateMapVisitedPoints'; // 正しい定義
+        const LOCAL_STORAGE_VISITED_POINTS_KEY = 'privateMapVisitedPoints';
 
         // 2点間の距離を計算するヘルパー関数 (Haversine formula)
         function calculateDistance(lat1, lon1, lat2, lon2) {
@@ -62,17 +66,17 @@
         }
 
         function App() {
-          const [userId, setUserId] = useState('local_user'); // ローカルストレージなので固定のユーザーID
+          const [userId, setUserId] = useState('local_user');
           const [records, setRecords] = useState([]);
-          const [visitedPoints, setVisitedPoints] = useState([]); // 訪れた場所の履歴
+          const [visitedPoints, setVisitedPoints] = useState([]);
           const [showForm, setShowForm] = useState(false);
           const [editingRecord, setEditingRecord] = useState(null);
           const [currentLocation, setCurrentLocation] = useState(null);
           const [mapInitialized, setMapInitialized] = useState(false);
           const [geolocationError, setGeolocationError] = useState(false);
           const mapRef = useRef(null);
-          const markersRef = useRef({}); // マーカーインスタンスを保持するための参照
-          const visitedCirclesRef = useRef([]); // 訪れた場所の円を保持するための参照
+          const markersRef = useRef({});
+          const visitedCirclesRef = useRef([]);
 
           // アプリ起動時にローカルストレージからデータを読み込む
           useEffect(() => {
@@ -104,7 +108,6 @@
                   if (visitedPoints.length === 0 || calculateDistance(visitedPoints[visitedPoints.length - 1][0], visitedPoints[visitedPoints.length - 1][1], newLocation[0], newLocation[1]) >= 50) {
                     setVisitedPoints(prevPoints => {
                       const updatedPoints = [...prevPoints, newLocation];
-                      // ここでタイプミスを修正: LOCAL_STORAGE_VISITED_VISITED_POINTS_KEY -> LOCAL_STORAGE_VISITED_POINTS_KEY
                       localStorage.setItem(LOCAL_STORAGE_VISITED_POINTS_KEY, JSON.stringify(updatedPoints));
                       return updatedPoints;
                     });
@@ -140,29 +143,54 @@
             };
 
             const loadLeafletJs = () => {
-              return new Promise((resolve) => {
+              return new Promise((resolve, reject) => {
                 if (window.L) {
                   resolve();
                   return;
                 }
-                if (!document.querySelector('script[src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"]')) {
-                  const script = document.createElement('script');
-                  script.src = 'https://unpkg.com/leaflet@1.7.1/dist/leaflet.js';
-                  script.onload = resolve;
-                  script.onerror = () => console.error("Leaflet JSのロードに失敗しました。");
-                  document.head.appendChild(script);
-                } else {
-                    const existingScript = document.querySelector('script[src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"]');
-                    if (existingScript) {
-                        existingScript.onload = resolve;
-                    }
+                const scriptId = 'leaflet-js-cdn';
+                if (document.getElementById(scriptId)) { // 既にスクリプトタグが存在する場合は、ロード完了を待つ
+                    document.getElementById(scriptId).onload = resolve;
+                    document.getElementById(scriptId).onerror = reject;
+                    return;
                 }
+                const script = document.createElement('script');
+                script.src = 'https://unpkg.com/leaflet@1.7.1/dist/leaflet.js';
+                script.id = scriptId;
+                script.onload = resolve;
+                script.onerror = reject;
+                document.head.appendChild(script);
               });
             };
 
             const initializeMap = async () => {
-              if (currentLocation && !mapInitialized) {
-                await loadLeafletJs();
+              if (!currentLocation) {
+                console.log("現在地がまだ取得できていません。マップ初期化をスキップします。");
+                return;
+              }
+              if (mapInitialized) {
+                console.log("マップは既に初期化されています。");
+                return;
+              }
+
+              // マップコンテナの存在とサイズを確認
+              const mapDiv = document.getElementById('map');
+              if (!mapDiv) {
+                console.error("マップコンテナ #map が見つかりません。");
+                return;
+              }
+              // マップコンテナの高さが0の場合、表示されないため初期化を遅延
+              if (mapDiv.offsetHeight === 0 || mapDiv.offsetWidth === 0) {
+                  console.log("マップコンテナのサイズが0です。再試行します。");
+                  setTimeout(initializeMap, 100); // 少し待って再試行
+                  return;
+              }
+
+
+              try {
+                await loadLeafletJs(); // Leaflet JSがロードされるまで待つ
+                loadLeafletCss(); // CSSはJSロード後に実行しても問題ない
+
                 if (window.L) {
                   // Leafletのデフォルトアイコンが壊れる問題を修正
                   delete window.L.Icon.Default.prototype._getIconUrl;
@@ -191,12 +219,16 @@
                     setShowForm(true);
                   });
                   setMapInitialized(true);
+                  console.log("マップが正常に初期化されました。");
+                } else {
+                  console.error("Leaflet (window.L) がロードされませんでした。");
                 }
+              } catch (error) {
+                console.error("マップの初期化中にエラーが発生しました:", error);
               }
             };
 
-            loadLeafletCss();
-            initializeMap();
+            initializeMap(); // マップの初期化を開始
 
             return () => {
               if (mapRef.current) {
@@ -204,10 +236,11 @@
                 mapRef.current = null;
               }
             };
-          }, [currentLocation, mapInitialized]);
+          }, [currentLocation, mapInitialized]); // currentLocationとmapInitializedのみに依存
 
           // 記録と現在地、訪れた場所が更新されたときにマップ上の要素を更新
           useEffect(() => {
+            // mapInitializedがtrueで、かつwindow.Lが存在することを確認
             if (mapInitialized && mapRef.current && window.L) {
               // 既存のマーカーと円をクリア
               Object.values(markersRef.current).forEach(marker => {
